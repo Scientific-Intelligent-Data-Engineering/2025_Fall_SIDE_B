@@ -1,0 +1,102 @@
+# ── import
+import numpy as np
+from sklearn.svm import SVR
+from sklearn.model_selection import GridSearchCV
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+
+# ── 데이터 5,000개만 사용 (조건 A)
+X = housing_prepared[:5000]
+y = np.asarray(housing_labels[:5000]).ravel()  # y는 1D로
+
+# ── 파이프라인: 스케일링(희소 대비 with_mean=False) → SVR
+pipe = Pipeline([
+    ("scaler", StandardScaler(with_mean=False)),
+    ("svr", SVR())
+])
+
+# ── 탐색 그리드: linear는 C만, rbf는 C+gamma (조건 1-A/B)
+param_grid = [
+    {"svr__kernel": ["linear"],
+     "svr__C": [0.1, 1, 3, 10, 30, 100]},
+    {"svr__kernel": ["rbf"],
+     "svr__C": [0.1, 1, 3, 10, 30, 100, 300, 1000],
+     "svr__gamma": [1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1, 3e-1]}
+]
+
+# ── GridSearchCV (조건 A: cv=3)
+gcv = GridSearchCV(
+    pipe, param_grid, cv=3,
+    scoring="neg_mean_squared_error",
+    n_jobs=-1, verbose=2
+)
+
+# ── 학습 & 결과
+gcv.fit(X, y)
+best_rmse = np.sqrt(-gcv.best_score_)
+print("① GridSearchCV best RMSE:", best_rmse)           # 작을수록 좋음
+print("① GridSearchCV best params:", gcv.best_params_)  # 최적 커널/하이퍼파라미터
+
+
+# ── import
+from sklearn.model_selection import RandomizedSearchCV
+from scipy.stats import loguniform
+
+# ── 파이프라인 재사용
+pipe = Pipeline([
+    ("scaler", StandardScaler(with_mean=False)),
+    ("svr", SVR())
+])
+
+# ── 분포 지정: C ~ loguniform(1e-2, 1e3), gamma ~ loguniform(1e-4, 1e0)
+param_dist = {
+    "svr__kernel": ["linear", "rbf"],        # 둘 다 고려
+    "svr__C": loguniform(1e-2, 1e3),         # 넓은 연속 구간에서 샘플
+    "svr__gamma": loguniform(1e-4, 1e0)      # linear일 때 gamma는 무시됨
+}
+
+# ── RandomizedSearchCV: 3-fold, n_iter=30 정도면 빠르고 합리적
+rscv = RandomizedSearchCV(
+    pipe, param_distributions=param_dist,
+    n_iter=30, cv=3, scoring="neg_mean_squared_error",
+    random_state=42, n_jobs=-1, verbose=2
+)
+
+rscv.fit(X, y)
+best_rmse_r = np.sqrt(-rscv.best_score_)
+print("② RandomizedSearchCV best RMSE:", best_rmse_r)
+print("② RandomizedSearchCV best params:", rscv.best_params_)
+
+# ── import
+from sklearn.feature_selection import SelectFromModel
+from sklearn.linear_model import SGDRegressor
+
+# ── 파이프라인: (특성선택: L1-정규화) → (스케일링) → (SVR)
+pipe_fs = Pipeline([
+    ("select", SelectFromModel(
+        SGDRegressor(penalty="l1", alpha=1e-4, random_state=42, max_iter=2000)
+    )),
+    ("scaler", StandardScaler(with_mean=False)),
+    ("svr", SVR())
+])
+
+# ── 튜닝: SVR 하이퍼파라미터 + 선택 임계치(threshold)도 함께 탐색
+param_grid_fs = [
+    {"select__max_features": [None, 200, 500, 1000],   # 선택할 최대 특성 수(없으면 자동)
+     "select__threshold": [None, "median", "1.0*mean"],# 가중치 기준 임계치
+     "svr__kernel": ["rbf"],
+     "svr__C": [1, 3, 10, 30, 100, 300, 1000],
+     "svr__gamma": [1e-3, 3e-3, 1e-2, 3e-2, 1e-1]}
+]
+
+gcv_fs = GridSearchCV(
+    pipe_fs, param_grid_fs,
+    cv=3, scoring="neg_mean_squared_error",
+    n_jobs=-1, verbose=2
+)
+
+gcv_fs.fit(X, y)
+best_rmse_fs = np.sqrt(-gcv_fs.best_score_)
+print("③ FS+SVR (GridSearch) best RMSE:", best_rmse_fs)
+print("③ FS+SVR best params:", gcv_fs.best_params_)
+
